@@ -44,11 +44,11 @@ func (s *apiServer) handleDocsUpload(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusInternalServerError, errorMsg)
 		return
 	}
-	defer writer.Close()
 
 	ctx, spanParse := tracer.Start(ctx, "csv.parse")
 	defer spanParse.End()
 	csvReader := csv.NewReader(file)
+	csvReader.LazyQuotes = true
 	_, err = csvReader.Read()
 	if err != nil {
 		errorMsg := fmt.Sprintf("failed to parse file: %v", err)
@@ -73,6 +73,7 @@ func (s *apiServer) handleDocsUpload(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, http.StatusInternalServerError, errorMsg)
 		return
 	}
+	writer.Close()
 	spanUpload.End()
 
 	s.totalFileUploaded.Add(ctx, 1)
@@ -84,8 +85,7 @@ func (s *apiServer) handleDocsUpload(w http.ResponseWriter, r *http.Request) {
 			"eventType": "file.upload",
 		},
 	}
-	carrier := telemetry.PubsubCarrier{Message: msg}
-	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	otel.GetTextMapPropagator().Inject(ctx, telemetry.PubsubMetadataCarrier(msg.Metadata))
 	err = s.topic.Send(ctx, msg)
 	if err != nil {
 		errorMsg := fmt.Sprintf("failed to queue file to be processed: %v", err)

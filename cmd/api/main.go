@@ -13,14 +13,6 @@ import (
 	"github.com/apex/log"
 	"github.com/joho/godotenv"
 	"gocloud.dev/blob"
-
-	// Import providers for blob storage
-	_ "gocloud.dev/blob/fileblob"
-	_ "gocloud.dev/blob/gcsblob"
-
-	// Import providers for pubsub
-	_ "gocloud.dev/pubsub/mempubsub"
-	_ "gocloud.dev/pubsub/natspubsub"
 )
 
 func NewBucket(prefix string) (*blob.Bucket, error) {

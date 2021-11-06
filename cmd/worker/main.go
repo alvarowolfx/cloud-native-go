@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"encoding/csv"
+	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/alvarowolfx/cloud-native-go/cloud"
@@ -13,29 +15,9 @@ import (
 	"github.com/joho/godotenv"
 	"go.opentelemetry.io/otel"
 	"gocloud.dev/blob"
+	"gocloud.dev/docstore"
 	"gocloud.dev/pubsub"
-
-	// Import providers for blob storage
-	_ "gocloud.dev/blob/fileblob"
-	_ "gocloud.dev/blob/gcsblob"
-
-	// Import providers for pubsub
-	_ "gocloud.dev/pubsub/mempubsub"
-	_ "gocloud.dev/pubsub/natspubsub"
 )
-
-func NewBucket(prefix string) (*blob.Bucket, error) {
-	ctx := context.Background()
-	url := os.Getenv("BUCKET_URL")
-	if url == "" {
-		url = "file://./tmp/"
-	}
-	bucket, err := blob.OpenBucket(ctx, url+"?prefix="+prefix)
-	if err != nil {
-		return nil, fmt.Errorf("could not open bucket: %v", err)
-	}
-	return bucket, nil
-}
 
 func main() {
 	_ = godotenv.Load()
@@ -49,18 +31,30 @@ func main() {
 	errs := make(chan error, 1)
 	done := make(chan bool, 1)
 
-	bucket, err := NewBucket("doc-files")
+	bucket, err := cloud.NewBucket("doc-files")
 	if err != nil {
 		log.Fatalf("failed to open bucket: %v", err)
 	}
 	defer bucket.Close()
 
+	coll, err := cloud.NewDocstore("docs", "id")
+	if err != nil {
+		log.Fatalf("failed to open collection: %v", err)
+	}
+	defer coll.Close()
+
 	sub, err := cloud.NewTopicSub()
 	if err != nil {
 		log.Fatalf("failed to open pubsub topic: %v", err)
 	}
-	defer sub.Shutdown(context.Background())
-	go listenMessages(bucket, sub)
+	defer func() {
+		err := sub.Shutdown(context.Background())
+		if err != nil {
+			log.Errorf("failed to shutdown pubsub topic: %v", err)
+			errs <- err
+		}
+	}()
+	go listenMessages(coll, bucket, sub)
 
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -79,7 +73,7 @@ func main() {
 	log.Info("shutdown")
 }
 
-func listenMessages(bucket *blob.Bucket, sub *pubsub.Subscription) {
+func listenMessages(coll *docstore.Collection, bucket *blob.Bucket, sub *pubsub.Subscription) {
 	logger := log.WithField("module", "worker")
 	for {
 		ctx := context.Background()
@@ -88,24 +82,69 @@ func listenMessages(bucket *blob.Bucket, sub *pubsub.Subscription) {
 			log.Errorf("failed to receive message: %v", err)
 			continue
 		}
-		carrier := telemetry.PubsubCarrier{Message: msg}
-		ctx = otel.GetTextMapPropagator().Extract(ctx, carrier)
+		ctx = otel.GetTextMapPropagator().Extract(ctx, telemetry.PubsubMetadataCarrier(msg.Metadata))
 
 		tracer := otel.Tracer("worker")
 		ctx, span := tracer.Start(ctx, "processing")
-		logger.Infof("received message: %s - %v - %s", msg.Body, msg.Metadata, span.SpanContext().TraceID().String())
+		jobId := string(msg.Body)
+		logger.Infof("received message: %s - %v - %s", jobId, msg.Metadata, span.SpanContext().TraceID().String())
 
 		ctx, spanDownloadFile := tracer.Start(ctx, "file.download")
-		_, err = bucket.ReadAll(ctx, string(msg.Body))
+		r, err := bucket.NewReader(ctx, string(msg.Body), nil)
 		if err != nil {
 			logger.Errorf("failed to read file: %v", err)
 			continue
 		}
+		csvReader := csv.NewReader(r)
+		csvReader.LazyQuotes = true
+
+		header, err := csvReader.Read()
+		if err != nil {
+			logger.Errorf("failed to read header: %v", err)
+			continue
+		}
+		records := make([]map[string]interface{}, 0)
+		for {
+			line, err := csvReader.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				logger.Errorf("failed to read csv: %v", err)
+				continue
+			}
+			record := map[string]interface{}{
+				"jobId": jobId,
+			}
+			for i, v := range line {
+				h := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(header[i], "\"", "")))
+				cv := strings.TrimSpace(strings.ReplaceAll(v, "\"", ""))
+				record[h] = cv
+			}
+			records = append(records, record)
+		}
 		spanDownloadFile.End()
 		span.AddEvent("file.read")
 
+		err = r.Close()
+		if err != nil {
+			logger.Errorf("failed to close file: %v", err)
+			continue
+		}
+
+		ctx, spanInsert := tracer.Start(ctx, "db.insert")
+		actionList := coll.Actions()
+		for _, record := range records {
+			actionList.Create(record)
+		}
+		if err := actionList.Do(ctx); err != nil {
+			logger.Errorf("failed to save records: %v", err)
+			continue
+		}
+		spanInsert.End()
+
+		msg.Ack()
 		span.AddEvent("acked")
 		span.End()
-		msg.Ack()
 	}
 }

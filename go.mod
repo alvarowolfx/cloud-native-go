@@ -19,5 +19,6 @@ require (
 	go.opentelemetry.io/otel/sdk/export/metric v0.24.0
 	go.opentelemetry.io/otel/sdk/metric v0.24.0
 	gocloud.dev v0.24.0
+	gocloud.dev/docstore/mongodocstore v0.24.0
 	gocloud.dev/pubsub/natspubsub v0.24.0
 )
