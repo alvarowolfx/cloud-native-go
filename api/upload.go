@@ -34,17 +34,6 @@ func (s *apiServer) handleDocsUpload(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	logger.WithField("size", handler.Size).WithField("filename", handler.Filename).Infof("file received")
 
-	ctx, spanUpload := tracer.Start(ctx, "file.upload")
-	defer spanUpload.End()
-	jobId := uuid.NewString()
-	writer, err := s.bucket.NewWriter(ctx, jobId, nil)
-	if err != nil {
-		errorMsg := fmt.Sprintf("failed to save file: %v", err)
-		logger.Error(errorMsg)
-		s.sendError(w, http.StatusInternalServerError, errorMsg)
-		return
-	}
-
 	ctx, spanParse := tracer.Start(ctx, "csv.parse")
 	defer spanParse.End()
 	csvReader := csv.NewReader(file)
@@ -61,6 +50,17 @@ func (s *apiServer) handleDocsUpload(w http.ResponseWriter, r *http.Request) {
 	_, err = file.Seek(0, io.SeekStart)
 	if err != nil {
 		errorMsg := fmt.Sprintf("failed to read file: %v", err)
+		logger.Error(errorMsg)
+		s.sendError(w, http.StatusInternalServerError, errorMsg)
+		return
+	}
+
+	ctx, spanUpload := tracer.Start(ctx, "file.upload")
+	defer spanUpload.End()
+	jobId := uuid.NewString()
+	writer, err := s.bucket.NewWriter(ctx, jobId, nil)
+	if err != nil {
+		errorMsg := fmt.Sprintf("failed to save file: %v", err)
 		logger.Error(errorMsg)
 		s.sendError(w, http.StatusInternalServerError, errorMsg)
 		return
