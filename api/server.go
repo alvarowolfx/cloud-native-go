@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/global"
 	"gocloud.dev/blob"
+	"gocloud.dev/docstore"
 	"gocloud.dev/pubsub"
 	"gocloud.dev/server"
 	"gocloud.dev/server/health"
@@ -29,12 +30,13 @@ type apiServer struct {
 
 	bucket *blob.Bucket
 	topic  *pubsub.Topic
+	coll   *docstore.Collection
 
 	totalFileUploaded     metric.Int64Counter
 	totalFileSizeUploaded metric.Int64Counter
 }
 
-func NewServer(topic *pubsub.Topic, bucket *blob.Bucket, port string, errs chan error) Server {
+func NewServer(coll *docstore.Collection, topic *pubsub.Topic, bucket *blob.Bucket, port string, errs chan error) Server {
 	logger := log.WithField("module", "api")
 
 	meter := global.GetMeterProvider().Meter("github.com/alvarowolfx/cloud-native-go")
@@ -47,6 +49,7 @@ func NewServer(topic *pubsub.Topic, bucket *blob.Bucket, port string, errs chan 
 		port:                  port,
 		errs:                  errs,
 		logger:                logger,
+		coll:                  coll,
 		topic:                 topic,
 		bucket:                bucket,
 		totalFileUploaded:     totalFileUploaded,
@@ -63,12 +66,15 @@ func handleOtelErr(err error) {
 func (s *apiServer) CheckHealth() error {
 	ctx := context.Background()
 	if ok, err := s.bucket.IsAccessible(ctx); !ok {
-		return fmt.Errorf("bucket is not accessible: %v", err)
+		e := fmt.Errorf("bucket is not accessible: %v", err)
+		s.logger.Error(e.Error())
+		return e
 	}
 	return nil
 }
 
 func (s *apiServer) sendError(w http.ResponseWriter, statusCode int, errorMsg string) {
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": errorMsg})
 }
@@ -96,6 +102,7 @@ func (s *apiServer) Start() {
 	r := mux.NewRouter()
 	r.Use(s.traceMiddleware)
 	r.HandleFunc("/api/docs/upload", s.handleDocsUpload)
+	r.HandleFunc("/api/{jobId}/docs", s.handleQueryByJobDocs)
 	r.HandleFunc("/api/docs", s.handleQueryDocs)
 
 	http.Handle("/", otelhttp.NewHandler(r, "api"))

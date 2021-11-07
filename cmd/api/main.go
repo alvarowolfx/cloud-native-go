@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,21 +11,7 @@ import (
 	"github.com/alvarowolfx/cloud-native-go/telemetry"
 	"github.com/apex/log"
 	"github.com/joho/godotenv"
-	"gocloud.dev/blob"
 )
-
-func NewBucket(prefix string) (*blob.Bucket, error) {
-	ctx := context.Background()
-	url := os.Getenv("BUCKET_URL")
-	if url == "" {
-		url = "file://./tmp/"
-	}
-	bucket, err := blob.OpenBucket(ctx, url+"?prefix="+prefix)
-	if err != nil {
-		return nil, fmt.Errorf("could not open bucket: %v", err)
-	}
-	return bucket, nil
-}
 
 func main() {
 	_ = godotenv.Load()
@@ -45,11 +30,16 @@ func main() {
 	errs := make(chan error, 1)
 	done := make(chan bool, 1)
 
-	bucket, err := NewBucket("doc-files")
+	bucket, err := cloud.NewBucket("doc-files")
 	if err != nil {
 		log.Fatalf("failed to open bucket: %v", err)
 	}
 	defer bucket.Close()
+
+	coll, err := cloud.NewDocstore("docs", "id")
+	if err != nil {
+		log.Fatalf("failed to open docstore: %v", err)
+	}
 
 	topic, err := cloud.NewTopic()
 	if err != nil {
@@ -57,7 +47,7 @@ func main() {
 	}
 	defer topic.Shutdown(context.Background())
 
-	srv := api.NewServer(topic, bucket, port, errs)
+	srv := api.NewServer(coll, topic, bucket, port, errs)
 	go srv.Start()
 
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)

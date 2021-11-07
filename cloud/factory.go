@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"gocloud.dev/blob"
 	"gocloud.dev/docstore"
@@ -12,6 +13,7 @@ import (
 	// Import providers for blob storage
 	_ "gocloud.dev/blob/fileblob"
 	_ "gocloud.dev/blob/gcsblob"
+	_ "gocloud.dev/blob/s3blob"
 
 	// Import providers for pubsub
 	_ "gocloud.dev/pubsub/mempubsub"
@@ -43,7 +45,13 @@ func NewBucket(prefix string) (*blob.Bucket, error) {
 	if url == "" {
 		url = "file://./tmp/"
 	}
-	bucket, err := blob.OpenBucket(ctx, url+"?prefix="+prefix)
+	if strings.Contains(url, "?") {
+		//url = url + "&prefix=" + prefix
+	} else {
+		url = url + "?prefix=" + prefix
+	}
+	fmt.Println("opening bucket", url)
+	bucket, err := blob.OpenBucket(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("could not open bucket: %v", err)
 	}

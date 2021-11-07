@@ -69,7 +69,9 @@ func handleOtelErr(err error) {
 func (w *worker) CheckHealth() error {
 	ctx := context.Background()
 	if ok, err := w.bucket.IsAccessible(ctx); !ok {
-		return fmt.Errorf("bucket is not accessible: %v", err)
+		e := fmt.Errorf("bucket is not accessible: %v", err)
+		w.logger.Error(e.Error())
+		return e
 	}
 	return nil
 }
