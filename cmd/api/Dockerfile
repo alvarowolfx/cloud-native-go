@@ -10,12 +10,12 @@ RUN go mod download
 # Copy rest of the application source code
 COPY . ./
 
-# Compile the application to /app.
-RUN go build -mod=readonly -v -o /app .
+# Compile the application to /app/bin.
+RUN go build -mod=readonly -v -o /app/bin ./cmd/api
 
 # Now create separate deployment image
 FROM gcr.io/distroless/base
 
 WORKDIR /app
-COPY --from=build /app /app
-ENTRYPOINT ["/app"]
+COPY --from=build /app/bin /app/bin
+ENTRYPOINT ["/app/bin"]
